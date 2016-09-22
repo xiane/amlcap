@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <getopt.h>
+#include <cstdlib> //atoi
 
 #include <exception>
 #include <vector>
@@ -21,7 +22,11 @@
 const char* DEFAULT_DEVICE = "/dev/video0";
 const char* DEFAULT_OUTPUT = "default.hevc";
 const int BUFFER_COUNT = 8;
-const int FRAME_RATE = 30;
+
+const int DEFAULT_WIDTH = 640;
+const int DEFAULT_HEIGHT = 480;
+const int DEFAULT_FRAME_RATE = 30;
+const int DEFAULT_BITRATE = 1000000 * 5;
 
 struct BufferMapping
 {
@@ -33,6 +38,10 @@ struct BufferMapping
 struct option longopts[] = {
 	{ "device",			required_argument,	NULL,	'd' },
 	{ "output",			required_argument,	NULL,	'o' },
+	{ "width",			required_argument,	NULL,	'w' },
+	{ "height",			required_argument,	NULL,	'h' },
+	{ "fps",			required_argument,	NULL,	'f' },
+	{ "bitrate",		required_argument,	NULL,	'b' },
 	{ 0, 0, 0, 0 }
 };
 
@@ -55,18 +64,38 @@ int main(int argc, char** argv)
 	// options
 	const char* device = DEFAULT_DEVICE;
 	const char* output = DEFAULT_OUTPUT;
+	int width = DEFAULT_WIDTH;
+	int height = DEFAULT_HEIGHT;
+	int fps = DEFAULT_FRAME_RATE;
+	int bitrate = DEFAULT_BITRATE;
 
 	int c;
-	while ((c = getopt_long(argc, argv, "d:o:w:h:f:", longopts, NULL)) != -1)
+	while ((c = getopt_long(argc, argv, "d:o:w:h:f:b:", longopts, NULL)) != -1)
 	{
 		switch (c)
 		{
-			case 'd':
-				device = optarg;
+			case 'd':			
+				device = optarg;			
 				break;
 
 			case 'o':
 				output = optarg;
+				break;
+
+			case 'w':
+				width = atoi(optarg);
+				break;
+
+			case 'h':
+				height = atoi(optarg);
+				break;
+
+			case 'f':
+				fps = atoi(optarg);
+				break;
+
+			case 'b':
+				bitrate = atoi(optarg);
 				break;
 
 			default:
@@ -165,8 +194,8 @@ int main(int argc, char** argv)
 
 	v4l2_format format = { 0 };
 	format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	format.fmt.pix.width = 640;
-	format.fmt.pix.height = 480;
+	format.fmt.pix.width = width;
+	format.fmt.pix.height = height;
 	format.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
 	//format.fmt.pix.field = V4L2_FIELD_ANY;
 
@@ -183,7 +212,7 @@ int main(int argc, char** argv)
 	v4l2_streamparm streamParm = { 0 };
 	streamParm.type = format.type;
 	streamParm.parm.capture.timeperframe.numerator = 1;
-	streamParm.parm.capture.timeperframe.denominator = FRAME_RATE;
+	streamParm.parm.capture.timeperframe.denominator = fps;
 
 	io = ioctl(captureDev, VIDIOC_S_PARM, &streamParm);
 	if (io < 0)
@@ -270,17 +299,18 @@ int main(int argc, char** argv)
 
 	// Initialize the encoder
 	vl_codec_id_t codec_id = CODEC_ID_H265;
-	int width = format.fmt.pix.width;
-	int height = format.fmt.pix.height;
-	int frame_rate = FRAME_RATE;
-	int bit_rate = 1000000 * 5;
+	width = format.fmt.pix.width;
+	height = format.fmt.pix.height;
+	fps = (int)((double)streamParm.parm.capture.timeperframe.denominator /
+				(double)streamParm.parm.capture.timeperframe.numerator);
+	//int bit_rate = bitrate;
 	int gop = 10;
 
-	fprintf(stderr, "vl_video_encoder_init: width=%d, height=%d, frame_rate=%d, bit_rate=%d, gop=%d\n",
-		width, height, frame_rate, bit_rate, gop);
+	fprintf(stderr, "vl_video_encoder_init: width=%d, height=%d, fps=%d, bitrate=%d, gop=%d\n",
+		width, height, fps, bitrate, gop);
 
 	vl_img_format_t img_format = IMG_FMT_NV12;
-	vl_codec_handle_t handle = vl_video_encoder_init(codec_id, width, height, frame_rate, bit_rate, gop);
+	vl_codec_handle_t handle = vl_video_encoder_init(codec_id, width, height, fps, bitrate, gop);
 	fprintf(stderr, "handle = %ld\n", handle);
 
 
@@ -295,12 +325,12 @@ int main(int argc, char** argv)
 
 
 	int nv12Size = format.fmt.pix.width * format.fmt.pix.height * 4;
-	unsigned char nv12[nv12Size] = { 0 };
+	unsigned char nv12[nv12Size];
 	fprintf(stderr, "nv12Size = %d\n", nv12Size);
 
-	const int ENCODEC_BUFFER_SIZE = 1024 * 1024 * sizeof(char);
-	unsigned char encodeBuffer[ENCODEC_BUFFER_SIZE];
-	fprintf(stderr, "ENCODEC_BUFFER_SIZE = %d\n", ENCODEC_BUFFER_SIZE);
+	int ENCODE_BUFFER_SIZE = nv12Size; //1024 * 32;
+	unsigned char encodeBuffer[ENCODE_BUFFER_SIZE];
+	//fprintf(stderr, "ENCODEC_BUFFER_SIZE = %d\n", ENCODEC_BUFFER_SIZE);
 
 	while (true)
 	{
@@ -356,7 +386,7 @@ int main(int argc, char** argv)
 		// Encode the video frames
 		vl_frame_type_t type = FRAME_TYPE_AUTO;
 		unsigned char* in = (unsigned char*)&nv12[0];
-		int in_size = ENCODEC_BUFFER_SIZE;
+		int in_size = ENCODE_BUFFER_SIZE;
 		unsigned char* out = encodeBuffer;
 		int outCnt = vl_video_encoder_encode(handle, type, in, in_size, out, img_format);
 		//printf("vl_video_encoder_encode = %d\n", outCnt);
