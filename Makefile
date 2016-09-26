@@ -3,6 +3,7 @@ CXX := $(CROSS_COMPILE)g++
 
 TARGET=amlcap
 LIB=libvphevcodec
+LDFLAGS += -lrt
 LDFLAGS += -L $(LIB) -l vphevcodec
 
 $(TARGET):

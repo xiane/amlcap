@@ -16,6 +16,10 @@
 #include <linux/videodev2.h> // V4L
 #include <sys/mman.h>	// mmap
 
+#include "Exception.h"
+#include "Stopwatch.h"
+#include "Timer.h"
+#include "Mutex.h"
 
 
 const char* DEFAULT_DEVICE = "/dev/video0";
@@ -27,12 +31,12 @@ const int DEFAULT_HEIGHT = 480;
 const int DEFAULT_FRAME_RATE = 30;
 const int DEFAULT_BITRATE = 1000000 * 10;
 
+
 struct BufferMapping
 {
 	void* Start;
 	size_t Length;
 };
-
 
 struct option longopts[] = {
 	{ "device",			required_argument,	NULL,	'd' },
@@ -44,16 +48,44 @@ struct option longopts[] = {
 	{ 0, 0, 0, 0 }
 };
 
-class Exception : public std::exception
+vl_codec_handle_t handle;
+vl_img_format_t img_format;
+int encoderFileDescriptor = -1;
+unsigned char* encodeNV12Buffer = nullptr;
+unsigned char* encodeBitstreamBuffer = nullptr;
+size_t encodeBitstreamBufferLength = 0;
+Mutex encodeMutex;
+double timeStamp = 0;
+double frameRate = 0;
+
+void EncodeFrame()
 {
-public:
-	Exception(const char* message)
-		: std::exception()
+	encodeMutex.Lock();
+
+	// Encode the video frames
+	vl_frame_type_t type = FRAME_TYPE_AUTO;
+	unsigned char* in = encodeNV12Buffer;
+	int in_size = encodeBitstreamBufferLength;
+	unsigned char* out = encodeBitstreamBuffer;
+	int outCnt = vl_video_encoder_encode(handle, type, in, in_size, out, img_format);
+	//printf("vl_video_encoder_encode = %d\n", outCnt);
+
+	encodeMutex.Unlock();
+
+	if (outCnt > 0)
 	{
-		fprintf(stderr, "%s\n", message);
+		ssize_t writeCount = write(encoderFileDescriptor, encodeBitstreamBuffer, outCnt);
+		if (writeCount < 0)
+		{
+			throw Exception("write failed.");
+		}
 	}
 
-};
+	timeStamp += frameRate;
+}
+
+Stopwatch sw;
+Timer timer;
 
 int main(int argc, char** argv)
 {
@@ -296,6 +328,8 @@ int main(int argc, char** argv)
 		}
 	}
 
+	encoderFileDescriptor = fdOut;
+
 	// Initialize the encoder
 	vl_codec_id_t codec_id = CODEC_ID_H265;
 	width = format.fmt.pix.width;
@@ -308,10 +342,9 @@ int main(int argc, char** argv)
 	fprintf(stderr, "vl_video_encoder_init: width=%d, height=%d, fps=%d, bitrate=%d, gop=%d\n",
 		width, height, fps, bitrate, gop);
 
-	vl_img_format_t img_format = IMG_FMT_NV12;
-	vl_codec_handle_t handle = vl_video_encoder_init(codec_id, width, height, fps, bitrate, gop);
+	img_format = IMG_FMT_NV12;
+	handle = vl_video_encoder_init(codec_id, width, height, fps, bitrate, gop);
 	fprintf(stderr, "handle = %ld\n", handle);
-
 
 	// Start streaming
 	int bufferType = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -324,12 +357,23 @@ int main(int argc, char** argv)
 
 
 	int nv12Size = format.fmt.pix.width * format.fmt.pix.height * 4;
-	unsigned char nv12[nv12Size];
+	unsigned char* nv12 = new unsigned char[nv12Size];
+	encodeNV12Buffer = nv12;
 	fprintf(stderr, "nv12Size = %d\n", nv12Size);
 
 	int ENCODE_BUFFER_SIZE = nv12Size; //1024 * 32;
-	unsigned char encodeBuffer[ENCODE_BUFFER_SIZE];
+	encodeBitstreamBufferLength = nv12Size;
+	encodeBitstreamBuffer = new unsigned char[ENCODE_BUFFER_SIZE];
 	//fprintf(stderr, "ENCODEC_BUFFER_SIZE = %d\n", ENCODEC_BUFFER_SIZE);
+
+
+	bool isFirstFrame = true;
+	int frames = 0;
+	float totalTime = 0;
+	sw.Start(); //ResetTime();
+	
+	timer.Callback = EncodeFrame;
+	timer.SetInterval(1.0 / fps);
 
 	while (true)
 	{
@@ -344,9 +388,17 @@ int main(int argc, char** argv)
 			throw Exception("VIDIOC_DQBUF failed.");
 		}
 
+		//Yuyv
+		if (isFirstFrame)
+		{
+			frameRate = timer.Interval();
+			timer.Start();
+			isFirstFrame = false;
+		}
+
+		encodeMutex.Lock();
 
 		// Process frame
-		//printf("Got a buffer: index = %d\n", buffer.index);
 		unsigned short* data = (unsigned short*)bufferMappings[buffer.index].Start;
 
 		// convert YUYV to NV12
@@ -381,24 +433,7 @@ int main(int argc, char** argv)
 				}
 			}
 		}
-
-		// Encode the video frames
-		vl_frame_type_t type = FRAME_TYPE_AUTO;
-		unsigned char* in = (unsigned char*)&nv12[0];
-		int in_size = ENCODE_BUFFER_SIZE;
-		unsigned char* out = encodeBuffer;
-		int outCnt = vl_video_encoder_encode(handle, type, in, in_size, out, img_format);
-		//printf("vl_video_encoder_encode = %d\n", outCnt);
-
-		if (outCnt > 0)
-		{
-			ssize_t writeCount = write(fdOut, encodeBuffer, outCnt);
-			if (writeCount < 0)
-			{
-				throw Exception("write failed.");
-			}
-		}
-		
+		encodeMutex.Unlock();
 
 		// return buffer
 		io = ioctl(captureDev, VIDIOC_QBUF, &buffer);
@@ -406,8 +441,26 @@ int main(int argc, char** argv)
 		{
 			throw Exception("VIDIOC_QBUF failed.");
 		}
+
+		// Measure FPS
+		++frames;
+		totalTime += (float)sw.Elapsed(); //GetTime();
+		
+		sw.Reset();
+
+		if (totalTime >= 1.0f)
+		{
+			int fps = (int)(frames / totalTime);
+			fprintf(stderr, "FPS: %i\n", fps);
+
+			frames = 0;
+			totalTime = 0;
+		}
 	}
 	close(fdOut);
+
+	delete encodeNV12Buffer;
+	delete encodeBitstreamBuffer;
 
 	vl_video_encoder_destroy(handle);
 
