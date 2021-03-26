@@ -11,7 +11,7 @@
 #include <vector>
 #include <cstring>
 
-#include "../c2_vpcodec/include/vpcodec_1_0.h"
+#include "libvphevcodec/vp_hevc_codec_1_0.h"
 
 #include <linux/videodev2.h> // V4L
 #include <sys/mman.h>	// mmap
@@ -19,7 +19,7 @@
 
 
 const char* DEFAULT_DEVICE = "/dev/video0";
-const char* DEFAULT_OUTPUT = "default.h264";
+const char* DEFAULT_OUTPUT = "default.hevc";
 const int BUFFER_COUNT = 8;
 const int FRAME_RATE = 30;
 
@@ -47,7 +47,6 @@ public:
 
 };
 
-
 int main(int argc, char** argv)
 {
 	int io;
@@ -56,15 +55,14 @@ int main(int argc, char** argv)
 	// options
 	const char* device = DEFAULT_DEVICE;
 	const char* output = DEFAULT_OUTPUT;
-	
 
 	int c;
-	while ((c = getopt_long(argc, argv, "d:o:", longopts, NULL)) != -1)
+	while ((c = getopt_long(argc, argv, "d:o:w:h:f:", longopts, NULL)) != -1)
 	{
 		switch (c)
 		{
-			case 'd':			
-				device = optarg;			
+			case 'd':
+				device = optarg;
 				break;
 
 			case 'o':
@@ -271,7 +269,7 @@ int main(int argc, char** argv)
 	}
 
 	// Initialize the encoder
-	vl_codec_id_t codec_id = CODEC_ID_H264;
+	vl_codec_id_t codec_id = CODEC_ID_H265;
 	int width = format.fmt.pix.width;
 	int height = format.fmt.pix.height;
 	int frame_rate = FRAME_RATE;
@@ -282,7 +280,7 @@ int main(int argc, char** argv)
 		width, height, frame_rate, bit_rate, gop);
 
 	vl_img_format_t img_format = IMG_FMT_NV12;
-	vl_codec_handle_t handle = vl_video_encoder_init(codec_id, width, height, frame_rate, bit_rate, gop, img_format);
+	vl_codec_handle_t handle = vl_video_encoder_init(codec_id, width, height, frame_rate, bit_rate, gop);
 	fprintf(stderr, "handle = %ld\n", handle);
 
 
@@ -300,8 +298,8 @@ int main(int argc, char** argv)
 	unsigned char nv12[nv12Size] = { 0 };
 	fprintf(stderr, "nv12Size = %d\n", nv12Size);
 
-	const int ENCODEC_BUFFER_SIZE = 1024 * 32;
-	char encodeBuffer[ENCODEC_BUFFER_SIZE];
+	const int ENCODEC_BUFFER_SIZE = 1024 * 1024 * sizeof(char);
+	unsigned char encodeBuffer[ENCODEC_BUFFER_SIZE];
 	fprintf(stderr, "ENCODEC_BUFFER_SIZE = %d\n", ENCODEC_BUFFER_SIZE);
 
 	while (true)
@@ -323,7 +321,7 @@ int main(int argc, char** argv)
 		unsigned short* data = (unsigned short*)bufferMappings[buffer.index].Start;
 
 		// convert YUYV to NV12
-		int srcStride = format.fmt.pix.width; // *sizeof(short);
+		int srcStride = format.fmt.pix.width;
 		int dstStride = format.fmt.pix.width;
 		int dstVUOffset = format.fmt.pix.width * format.fmt.pix.height;
 
@@ -337,25 +335,30 @@ int main(int argc, char** argv)
 				unsigned short yv = data[srcIndex + 1];
 
 
-				int dstIndex = y * dstStride + (x);
+				int dstIndex = (y * dstStride) + (x);
 				nv12[dstIndex] = yu & 0xff;
 				nv12[dstIndex + 1] = yv & 0xff;
 
 				if (y % 2 == 0)
 				{
 					int dstVUIndex = (y >> 1) * dstStride + (x);
-					nv12[dstVUOffset + dstVUIndex] = yv >> 8;
-					nv12[dstVUOffset + dstVUIndex + 1] = yu >> 8;
+					if (img_format == IMG_FMT_NV12) {
+						nv12[dstVUOffset + dstVUIndex] = yu >> 8;
+						nv12[dstVUOffset + dstVUIndex + 1] = yv >> 8;
+					} else { // IMG_FMT_NV21
+						nv12[dstVUOffset + dstVUIndex] = yv >> 8;
+						nv12[dstVUOffset + dstVUIndex + 1] = yu >> 8;
+					}
 				}
 			}
 		}
 
 		// Encode the video frames
 		vl_frame_type_t type = FRAME_TYPE_AUTO;
-		char* in = (char*)&nv12[0];
+		unsigned char* in = (unsigned char*)&nv12[0];
 		int in_size = ENCODEC_BUFFER_SIZE;
-		char* out = encodeBuffer;
-		int outCnt = vl_video_encoder_encode(handle, type, in, in_size, &out);
+		unsigned char* out = encodeBuffer;
+		int outCnt = vl_video_encoder_encode(handle, type, in, in_size, out, img_format);
 		//printf("vl_video_encoder_encode = %d\n", outCnt);
 
 		if (outCnt > 0)
@@ -375,89 +378,9 @@ int main(int argc, char** argv)
 			throw Exception("VIDIOC_QBUF failed.");
 		}
 	}
-
-
-	return 0;
-}
-
-
-#if 0
-int test_main()
-{
-	// Load the NV12 test data
-	int fd = open("maxresdefault.yuv", O_RDONLY);
-	if (fd < 0)
-	{
-		printf("open failed.\n");
-		throw std::exception();
-	}
-
-	off_t length = lseek(fd, 0, SEEK_END);
-	lseek(fd, 0, SEEK_SET);
-
-	std::vector<char> data(length);
-	ssize_t cnt = read(fd, &data[0], length);
-
-	close(fd);
-
-	if (cnt != length)
-	{
-		printf("read failed.\n");
-		throw std::exception();
-	}
-
-
-	// Create an output file
-	mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
-	int fdOut = open("test.h264", O_CREAT| O_TRUNC | O_WRONLY, mode);
-	if (fdOut < 0)
-	{
-		printf("open test.h24 failed\n");
-		throw std::exception();
-	}
-
-
-	// Initialize the encoder
-	vl_codec_id_t codec_id = CODEC_ID_H264;
-	int width = 1280;
-	int height = 720;
-	int frame_rate = 30;
-	int bit_rate = 1000000 * 10;
-	int gop = 10;
-	vl_img_format_t img_format = IMG_FMT_NV12;
-
-	vl_codec_handle_t handle = vl_video_encoder_init(codec_id, width, height, frame_rate, bit_rate, gop, img_format);
-	printf("handle = %ld\n", handle);
-
-	
-	// Encode the video frames
-	const int BUFFER_SIZE = 1024 * 32;
-	char buffer[BUFFER_SIZE];
-	for (int i = 0; i < 30 * 30; ++i)
-	{
-		vl_frame_type_t type = FRAME_TYPE_AUTO;
-		char* in = &data[0];
-		int in_size = BUFFER_SIZE;
-		char* out = buffer;
-		int outCnt = vl_video_encoder_encode(handle, type, in, in_size, &out);
-		printf("vl_video_encoder_encode = %d\n", outCnt);
-
-		if (outCnt > 0)
-		{
-			write(fdOut, buffer, outCnt);
-		}
-	}
-
-
-	// Close the decoder
-	int vl_video_encoder_destory(handle);
-
-
-	// Close the output file
 	close(fdOut);
 
+	vl_video_encoder_destroy(handle);
+
 	return 0;
 }
-
-#endif
-
