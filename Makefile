@@ -1,3 +1,6 @@
+CROSS_COMPILE ?=
+CXX := $(CROSS_COMPILE)g++
+
 all:
-	g++ -g -O2 main.cpp -o c2cap -l vpcodec
+	$(CXX) -g -O2 main.cpp -o c2cap -L libvphevcodec -l vphevcodec
 
