@@ -1,5 +1,4 @@
-// g++ -g main.cpp -o c2cap -l vpcodec
-// ffmpeg -framerate 60 -i test.h264 -vcodec copy test.mp4
+// ffmpeg -framerate 60 -i test.hevc -vcodec copy test.mp4
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -26,7 +25,7 @@ const int BUFFER_COUNT = 8;
 const int DEFAULT_WIDTH = 640;
 const int DEFAULT_HEIGHT = 480;
 const int DEFAULT_FRAME_RATE = 30;
-const int DEFAULT_BITRATE = 1000000 * 5;
+const int DEFAULT_BITRATE = 1000000 * 10;
 
 struct BufferMapping
 {
@@ -74,8 +73,8 @@ int main(int argc, char** argv)
 	{
 		switch (c)
 		{
-			case 'd':			
-				device = optarg;			
+			case 'd':
+				device = optarg;
 				break;
 
 			case 'o':

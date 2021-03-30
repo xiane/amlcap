@@ -1,6 +1,14 @@
 CROSS_COMPILE ?=
 CXX := $(CROSS_COMPILE)g++
 
-all:
-	$(CXX) -g -O2 main.cpp -o c2cap -L libvphevcodec -l vphevcodec
+TARGET=amlcap
+LIB=libvphevcodec
+LDFLAGS += -L $(LIB) -l vphevcodec
 
+$(TARGET):
+	$(MAKE) -C $(LIB)
+	$(CXX) -g -O2 main.cpp -o $@ $(LDFLAGS)
+
+clean:
+	-rm -f $(TARGET)
+	$(MAKE) -C $(LIB) clean

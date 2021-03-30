@@ -1,9 +1,9 @@
-c2cap - Captures video from a V4L2 device and compresses it to a hevc bitstream
+amlcap - Captures video from a V4L2 device and compresses it to a hevc bitstream
 		using the S905x3/S922 hardware codec.
 
 Usage:
 
-	./c2cap [-d v4l2_device_name] [-o output_file_name]
+	./amlcap [-d v4l2_device_name] [-o output_file_name]
 	
 	Captures and writes a hevc bitstream.  V4L2_device_name can be any capture
 	device that supports YUYV surfaces. The special file_name "-" outputs to
