@@ -2,15 +2,11 @@
 
 #include <pthread.h>
 
-
 class Mutex
 {
 	pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
 public:
-
 	Mutex() {}
-
 
 	void Lock()
 	{

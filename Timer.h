@@ -6,18 +6,14 @@
 
 #include "Exception.h"
 
-
-
 class Timer
 {
 	typedef void(*TimerNotifyFunction)();
 
 	timer_t timer_id;
 
-
 	double interval = 0;
 	bool isRunning = false;
-
 
 	static void timer_thread(sigval arg)
 	{
@@ -29,11 +25,8 @@ class Timer
 		}
 	}
 
-
 public:
 	TimerNotifyFunction Callback = nullptr;
-
-
 
 	double Interval() const
 	{
@@ -43,8 +36,6 @@ public:
 	{
 		interval = value;
 	}
-
-
 
 	Timer()
 	{
@@ -68,12 +59,10 @@ public:
 		timer_delete(timer_id);
 	}
 
-
 	void Start()
 	{
 		if (isRunning)
 			throw InvalidOperationException();
-
 
 		itimerspec ts = { 0 };
 
@@ -98,7 +87,6 @@ public:
 	{
 		if (!isRunning)
 			throw InvalidOperationException();
-
 
 		itimerspec ts = { 0 };
 

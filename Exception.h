@@ -3,7 +3,6 @@
 #include <exception>
 #include <cstdio>
 
-
 class Exception : public std::exception
 {
 public:
@@ -17,7 +16,6 @@ public:
 	{
 		fprintf(stderr, "%s\n", message);
 	}
-
 };
 
 class InvalidOperationException : public Exception

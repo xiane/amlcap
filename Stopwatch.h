@@ -2,7 +2,6 @@
 
 #include "Exception.h"
 
-
 class Stopwatch
 {
 	timeval startTime;
@@ -10,15 +9,11 @@ class Stopwatch
 	double elapsed = 0;
 	bool isRunning = false;
 
-
 public:
-
 	Stopwatch()
 	{
 		Reset();
 	}
-
-
 
 	void Start()
 	{

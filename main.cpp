@@ -21,7 +21,6 @@
 #include "Timer.h"
 #include "Mutex.h"
 
-
 const char* DEFAULT_DEVICE = "/dev/video0";
 const char* DEFAULT_OUTPUT = "default.hevc";
 const int BUFFER_COUNT = 8;
@@ -30,7 +29,6 @@ const int DEFAULT_WIDTH = 640;
 const int DEFAULT_HEIGHT = 480;
 const int DEFAULT_FRAME_RATE = 30;
 const int DEFAULT_BITRATE = 1000000 * 10;
-
 
 struct BufferMapping
 {
@@ -51,12 +49,15 @@ struct option longopts[] = {
 vl_codec_handle_t handle;
 vl_img_format_t img_format;
 int encoderFileDescriptor = -1;
-unsigned char* encodeNV12Buffer = nullptr;
+unsigned char* encodeInBuffer = nullptr;
 unsigned char* encodeBitstreamBuffer = nullptr;
 size_t encodeBitstreamBufferLength = 0;
 Mutex encodeMutex;
 double timeStamp = 0;
 double frameRate = 0;
+
+Stopwatch sw;
+Timer timer;
 
 void EncodeFrame()
 {
@@ -64,11 +65,10 @@ void EncodeFrame()
 
 	// Encode the video frames
 	vl_frame_type_t type = FRAME_TYPE_AUTO;
-	unsigned char* in = encodeNV12Buffer;
+	unsigned char* in = encodeInBuffer;
 	int in_size = encodeBitstreamBufferLength;
 	unsigned char* out = encodeBitstreamBuffer;
 	int outCnt = vl_video_encoder_encode(handle, type, in, in_size, out, img_format);
-	//printf("vl_video_encoder_encode = %d\n", outCnt);
 
 	encodeMutex.Unlock();
 
@@ -84,13 +84,9 @@ void EncodeFrame()
 	timeStamp += frameRate;
 }
 
-Stopwatch sw;
-Timer timer;
-
 int main(int argc, char** argv)
 {
 	int io;
-
 
 	// options
 	const char* device = DEFAULT_DEVICE;
@@ -128,19 +124,16 @@ int main(int argc, char** argv)
 			case 'b':
 				bitrate = atoi(optarg);
 				break;
-
 			default:
 				throw Exception("Unknown option.");
 		}
 	}
-
 
 	int captureDev = open(device, O_RDWR);
 	if (captureDev < 0)
 	{
 		throw Exception("capture device open failed.");
 	}
-
 
 	v4l2_capability caps = { 0 };
 	io = ioctl(captureDev, VIDIOC_QUERYCAP, &caps);
@@ -161,8 +154,6 @@ int main(int argc, char** argv)
 	{
 		fprintf(stderr, "V4L2_CAP_VIDEO_CAPTURE supported.\n");
 	}
-
-
 
 	v4l2_fmtdesc formatDesc = { 0 };
 	formatDesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -194,7 +185,6 @@ int main(int argc, char** argv)
 
 			fprintf(stderr, "\t\twidth = %d, height = %d\n", formatSize.discrete.width, formatSize.discrete.height);
 
-
 			v4l2_frmivalenum frameInterval = { 0 };
 			frameInterval.pixel_format = formatSize.pixel_format;
 			frameInterval.width = formatSize.discrete.width;
@@ -212,14 +202,10 @@ int main(int argc, char** argv)
 				fprintf(stderr, "\t\t\tnumerator = %d, denominator = %d\n", frameInterval.discrete.numerator, frameInterval.discrete.denominator);
 				++frameInterval.index;
 			}
-
-
 			++formatSize.index;
 		}
-
 		++formatDesc.index;
 	}
-
 	
 	// TODO: format selection from user input / enumeration
 
@@ -239,7 +225,6 @@ int main(int argc, char** argv)
 	fprintf(stderr, "v4l2_format: width=%d, height=%d, pixelformat=0x%x\n",
 		format.fmt.pix.width, format.fmt.pix.height, format.fmt.pix.pixelformat);
 
-
 	v4l2_streamparm streamParm = { 0 };
 	streamParm.type = format.type;
 	streamParm.parm.capture.timeperframe.numerator = 1;
@@ -255,7 +240,6 @@ int main(int argc, char** argv)
 		streamParm.parm.capture.timeperframe.numerator,
 		streamParm.parm.capture.timeperframe.denominator);
 
-
 	// Request buffers
 	v4l2_requestbuffers requestBuffers = { 0 };
 	requestBuffers.count = BUFFER_COUNT;
@@ -268,7 +252,6 @@ int main(int argc, char** argv)
 		throw Exception("VIDIOC_REQBUFS failed.");
 	}
 
-	
 	// Map buffers
 	BufferMapping bufferMappings[requestBuffers.count] = { 0 };
 	for (int i = 0; i < requestBuffers.count; ++i)
@@ -291,7 +274,6 @@ int main(int argc, char** argv)
 			captureDev, buffer.m.offset);
 	}
 
-
 	// Queue buffers
 	for (int i = 0; i < requestBuffers.count; ++i)
 	{
@@ -307,12 +289,9 @@ int main(int argc, char** argv)
 		}
 	}
 
-
-
 	// Create an output file
-	
 	int fdOut;
-	
+
 	if (std::strcmp(output, "-") == 0)
 	{
 		fdOut = 1; //stdout
@@ -320,7 +299,7 @@ int main(int argc, char** argv)
 	else
 	{
 		mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
-		
+
 		fdOut = open(output, O_CREAT | O_TRUNC | O_WRONLY, mode);
 		if (fdOut < 0)
 		{
@@ -355,17 +334,13 @@ int main(int argc, char** argv)
 		throw Exception("VIDIOC_STREAMON failed.");
 	}
 
+	int bufferSize = format.fmt.pix.width * format.fmt.pix.height * 4;
+	unsigned char* srcBuf = new unsigned char[bufferSize];
+	encodeInBuffer = srcBuf;
+	fprintf(stderr, "Source Buffer Size = %d\n", bufferSize);
 
-	int nv12Size = format.fmt.pix.width * format.fmt.pix.height * 4;
-	unsigned char* nv12 = new unsigned char[nv12Size];
-	encodeNV12Buffer = nv12;
-	fprintf(stderr, "nv12Size = %d\n", nv12Size);
-
-	int ENCODE_BUFFER_SIZE = nv12Size; //1024 * 32;
-	encodeBitstreamBufferLength = nv12Size;
-	encodeBitstreamBuffer = new unsigned char[ENCODE_BUFFER_SIZE];
-	//fprintf(stderr, "ENCODEC_BUFFER_SIZE = %d\n", ENCODEC_BUFFER_SIZE);
-
+	encodeBitstreamBufferLength = bufferSize;
+	encodeBitstreamBuffer = new unsigned char[bufferSize];
 
 	bool isFirstFrame = true;
 	int frames = 0;
@@ -415,20 +390,19 @@ int main(int argc, char** argv)
 				unsigned short yu = data[srcIndex];
 				unsigned short yv = data[srcIndex + 1];
 
-
 				int dstIndex = (y * dstStride) + (x);
-				nv12[dstIndex] = yu & 0xff;
-				nv12[dstIndex + 1] = yv & 0xff;
+				srcBuf[dstIndex] = yu & 0xff;
+				srcBuf[dstIndex + 1] = yv & 0xff;
 
 				if (y % 2 == 0)
 				{
 					int dstVUIndex = (y >> 1) * dstStride + (x);
 					if (img_format == IMG_FMT_NV12) {
-						nv12[dstVUOffset + dstVUIndex] = yu >> 8;
-						nv12[dstVUOffset + dstVUIndex + 1] = yv >> 8;
+						srcBuf[dstVUOffset + dstVUIndex] = yu >> 8;
+						srcBuf[dstVUOffset + dstVUIndex + 1] = yv >> 8;
 					} else { // IMG_FMT_NV21
-						nv12[dstVUOffset + dstVUIndex] = yv >> 8;
-						nv12[dstVUOffset + dstVUIndex + 1] = yu >> 8;
+						srcBuf[dstVUOffset + dstVUIndex] = yv >> 8;
+						srcBuf[dstVUOffset + dstVUIndex + 1] = yu >> 8;
 					}
 				}
 			}
@@ -445,7 +419,7 @@ int main(int argc, char** argv)
 		// Measure FPS
 		++frames;
 		totalTime += (float)sw.Elapsed(); //GetTime();
-		
+
 		sw.Reset();
 
 		if (totalTime >= 1.0f)
@@ -457,9 +431,11 @@ int main(int argc, char** argv)
 			totalTime = 0;
 		}
 	}
+	timer.Stop();
 	close(fdOut);
+	close(captureDev);
 
-	delete encodeNV12Buffer;
+	delete encodeInBuffer;
 	delete encodeBitstreamBuffer;
 
 	vl_video_encoder_destroy(handle);
